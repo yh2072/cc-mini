@@ -51,6 +51,8 @@ class EscListener:
         self._thread: threading.Thread | None = None
         self._old_settings = None
         self._fd = sys.stdin.fileno()
+        # Docker / subprocess / CI: stdin is not a TTY — termios.tcgetattr fails.
+        self._active = bool(sys.stdin.isatty())
 
     # -- context manager --------------------------------------------------
 
@@ -58,6 +60,10 @@ class EscListener:
         self.pressed = False
         self._stop.clear()
         self._paused.clear()
+        if not self._active:
+            self._old_settings = None
+            self._thread = None
+            return self
         # Save terminal settings and switch to cbreak mode
         # (chars available immediately, Ctrl+C still raises KeyboardInterrupt)
         self._old_settings = termios.tcgetattr(self._fd)
@@ -96,6 +102,8 @@ class EscListener:
 
         Returns True if ESC was detected.
         """
+        if not self._active:
+            return False
         if self.pressed:
             return True
         while self._has_data(0):
@@ -172,6 +180,7 @@ if not _HAS_TERMIOS:
             self._stop = threading.Event()
             self._paused = threading.Event()   # set = paused, clear = running
             self._thread: threading.Thread | None = None
+            self._active = bool(sys.stdin.isatty())
 
         # -- context manager --------------------------------------------------
 
@@ -179,6 +188,9 @@ if not _HAS_TERMIOS:
             self.pressed = False
             self._stop.clear()
             self._paused.clear()
+            if not self._active:
+                self._thread = None
+                return self
             self._thread = threading.Thread(target=self._listen, daemon=True)
             self._thread.start()
             return self
@@ -201,6 +213,8 @@ if not _HAS_TERMIOS:
         # -- non-blocking ESC check for main thread ----------------------------
 
         def check_esc_nonblocking(self) -> bool:
+            if not self._active:
+                return False
             if self.pressed:
                 return True
             while msvcrt.kbhit():
